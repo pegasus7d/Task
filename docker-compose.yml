@@ -1,0 +1,23 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: test-evals-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER:     postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB:       eval_db
+    ports:
+      # Host 5433 → container 5432 (5432 is already used by another local project's
+      # container — pick a free port on the host but keep Postgres on 5432 inside).
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test:     ["CMD-SHELL", "pg_isready -U postgres -d eval_db"]
+      interval: 5s
+      timeout:  3s
+      retries:  10
+
+volumes:
+  postgres_data:
