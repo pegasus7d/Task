@@ -9,11 +9,9 @@
   },
   "dependencies": {
     "@tanstack/react-form": "^1.28.0",
-    "@test-evals/auth": "workspace:*",
     "@test-evals/env": "workspace:*",
     "@test-evals/ui": "workspace:*",
     "babel-plugin-react-compiler": "^1.0.0",
-    "better-auth": "catalog:",
     "dotenv": "catalog:",
     "lucide-react": "catalog:",
     "next": "^16.2.0",

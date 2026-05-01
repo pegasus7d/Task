@@ -13,10 +13,8 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.92.0",
-    "@test-evals/auth": "workspace:*",
     "@test-evals/db": "workspace:*",
     "@test-evals/env": "workspace:*",
-    "better-auth": "catalog:",
     "dotenv": "catalog:",
     "hono": "^4.8.2",
     "zod": "catalog:"
