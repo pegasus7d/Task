@@ -8,9 +8,11 @@ dist
 build
 *.tsbuildinfo
 
-# Environment variables
+# Environment variables — KEEP COMMITTED: .env.example
+# Brief hard-req #10: ANTHROPIC_API_KEY must never reach a browser/repo.
 .env
-.env*.local
+.env.*
+!.env.example
 
 # IDEs and editors
 .vscode/*
@@ -43,9 +45,40 @@ lerna-debug.log*
 # Testing
 coverage
 .nyc_output
+__snapshots__/
+
+# Next.js (apps/web)
+.next/
+next-env.d.ts
+.vercel/
+
+# Bun
+bun.lockb
+.bun/
+
+# Drizzle ORM — DO commit migration files; ignore generated junk
+**/drizzle/meta/_journal.json.lock
+
+# Compiled CLI binary (apps/server `bun run compile` → ./server)
+apps/server/server
+apps/server/server.exe
+
+# Per-attempt raw response dumps (entities.md §1.6 raw_response_path) +
+# CLI artifacts. ROOT-anchored so /runs/ doesn't accidentally match
+# apps/web/src/app/runs/ (the run-detail UI route group).
+/runs/
+/results/
+
+# Dev-server logs from scripts/start-dev.sh
+.dev-logs/
+
+# Local Postgres data when using docker-compose volumes
+postgres-data/
+pg-data/
 
 # Misc
 *.tgz
 .cache
 tmp
 temp
+.tsbuildinfo
