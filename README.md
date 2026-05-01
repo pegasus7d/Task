@@ -1,216 +1,190 @@
-# HEALOSBENCH — Eval Harness for Structured Clinical Extraction
+# HEALOSBENCH
 
-> **Take-home assessment** · target ~8–12 focused hours · synthetic data only
+**A production-grade LLM evaluation harness for structured clinical extraction.** Three prompt strategies, retry-with-feedback, fuzzy hallucination detection, bounded concurrency with 429 backoff, resumable runs, and a compare dashboard — all built end-to-end against [the brief](#the-brief) at `medinoteorg/test-evals`.
 
-You're shipping an LLM-powered feature that turns a clinical transcript into structured JSON: chief complaint, vitals, medications, diagnoses, and follow-up plan. Once it's in production, you can't just "vibe-check" the prompt — you need a **repeatable evaluation harness** that tells you, with numbers, whether prompt v7 is better than prompt v6, on which fields, and where it fails.
-
-Your job is to build that harness end-to-end: dataset loader, runner, evaluator, dashboard.
+Turns a clinical doctor–patient transcript into structured JSON (chief complaint, vitals, medications, diagnoses, plan, follow-up), then scores every field against gold using the metric appropriate to its type, and surfaces per-field deltas between prompt strategies in a comparison UI.
 
 ---
 
-## Table of Contents
-
-1. [What's Provided](#whats-provided)
-2. [Stack](#stack)
-3. [What You're Building](#what-youre-building)
-4. [Hard Requirements](#hard-requirements)
-5. [Stretch Goals](#stretch-goals)
-6. [Constraints](#constraints)
-7. [How to Run](#how-to-run)
-8. [What We're Looking For](#what-were-looking-for)
-9. [Submission](#submission)
-
----
-
-## What's Provided
-
-In `data/`:
-
-| File | Description |
-| --- | --- |
-| `transcripts/*.txt` | 50 synthetic doctor–patient transcripts (~150–800 tokens each). Real-feeling but fully synthetic; no PHI. |
-| `gold/*.json` | For each transcript, the ground-truth structured extraction a human annotator produced. |
-| `schema.json` | The JSON Schema all extractions must conform to. |
-
-The schema covers:
-
-- `chief_complaint` *(string)*
-- `vitals` *(object: `bp`, `hr`, `temp_f`, `spo2` — any may be `null`)*
-- `medications` *(array of `{ name, dose, frequency, route }`)*
-- `diagnoses` *(array of `{ description, icd10? }`)*
-- `plan` *(array of strings)*
-- `follow_up` *(object: `interval_days` int or null, `reason` string or null)*
-
-> ⚠️ You **may not** modify the gold files or the schema. You **may** extend the transcript set with additional cases.
-
----
-
-## Stack
-
-The monorepo is already wired up:
-
-- **Workspaces**: bun workspaces + Turborepo
-- **`apps/web`** — Next.js 16 client-only dashboard
-- **`apps/server`** — Hono on `:8787`, runs evals and stores results
-- **`packages/db`** — Postgres + Drizzle ORM for storing runs
-- **`packages/env`** — typed environment loading (zod)
-- **`packages/auth`** — better-auth (not required for the eval task; ignore unless useful)
-- **`packages/config`**, **`packages/ui`** — shared TS config and UI primitives
-
-You will also create (or extend):
-
-- **`packages/shared`** — shared types between server and web (schema types, run/result DTOs).
-- **`packages/llm`** — a thin wrapper around the Anthropic SDK, with prompt strategies, tool use, retry-with-feedback, and prompt caching.
-
-You'll need an Anthropic API key in `apps/server/.env` as `ANTHROPIC_API_KEY`. Use **Haiku 4.5** (`claude-haiku-4-5-20251001`) for cost; the eval is designed to be useful at Haiku quality.
-
----
-
-## What You're Building
-
-### 1. The extractor
-
-> `packages/llm` + `apps/server/src/services/extract.service.ts`
-
-- Takes a transcript and a **prompt strategy** (`zero_shot`, `few_shot`, `cot`) and returns extracted JSON.
-- Use **Anthropic tool use** (or a strict JSON output mode) to force schema-conformant output. Free-form `JSON.parse` of model text is **not** acceptable.
-- **Retry loop**: if the output fails JSON Schema validation, send the validation errors back to the model and let it self-correct. Cap at 3 attempts. Log every attempt.
-- **Prompt caching**: the system prompt + few-shot examples must be cache-controlled so repeated runs don't pay for the same tokens. Verify via the SDK's `cache_read_input_tokens` field and surface this in the run summary.
-- All three strategies live in the same codebase as swappable modules so adding a fourth is a 30-line change.
-
-### 2. The evaluator
-
-> `apps/server/src/services/evaluate.service.ts`
-
-For each `(transcript, prediction, gold)` triple, compute **per-field scores using the metric appropriate to the field**:
-
-| Field | Metric |
-| --- | --- |
-| `chief_complaint` | Fuzzy string match (normalize case/punctuation; token-set ratio or similar). Score ∈ [0, 1]. |
-| `vitals.*` | Exact match per sub-field, with a tolerance for numeric fields (e.g. `temp_f` ±0.2 °F). Per-field 0/1, then averaged. |
-| `medications` | Set-based **precision / recall / F1**. Two meds match if `name` is a fuzzy match **and** `dose` + `frequency` agree after normalization (e.g. `BID` == `twice daily`, `10 mg` == `10mg`). |
-| `diagnoses` | Set-based F1 by `description` fuzzy match; bonus credit if predicted `icd10` matches gold. |
-| `plan` | Set-based F1 on plan items, fuzzy-matched. |
-| `follow_up` | Exact match on `interval_days`, fuzzy on `reason`. |
-
-You must also detect and report:
-
-- **Schema-invalid outputs** that escaped the retry loop (should be rare; track the rate).
-- **Hallucinated fields** — values present in prediction but with no textual support in the transcript. Implement a simple grounding check: the predicted value (or a normalized form of it) must appear as a substring or close fuzzy match in the transcript. Flag and count these.
-
-Per run, store: per-case scores, per-field aggregates, hallucination count, schema-failure count, total tokens (input/output/cache-read/cache-write), wall time, total cost in USD.
-
-### 3. The runner
-
-> `apps/server/src/services/runner.service.ts`
-
-- `POST /api/v1/runs` with `{ strategy, model, dataset_filter? }` starts a run.
-- Runs are concurrent (up to 5 cases in-flight) but respect Anthropic rate limits — implement a token-bucket or simple semaphore-with-backoff. **Don't** just `Promise.all` 50 cases.
-- Stream progress to the dashboard via **SSE** as cases complete.
-- Runs are **resumable**: if the server crashes mid-run, restarting and hitting `POST /api/v1/runs/:id/resume` continues from the last completed case (no double-charging).
-- **Idempotency**: posting the same `{ strategy, model, transcript_id }` twice without `force=true` should return the cached result, not re-call the LLM.
-
-### 4. The dashboard
-
-> `apps/web`
-
-- **Runs list** — every run, with strategy, model, aggregate F1, cost, duration, status.
-- **Run detail** — table of all 50 cases with per-case scores; click into a case to see:
-  - The transcript (highlighted where prediction values are grounded).
-  - The gold JSON and the predicted JSON, side-by-side, with a **field-level diff**.
-  - The full LLM trace: every attempt in the retry loop, each request and response, cache stats.
-- **Compare view** — pick two runs and see per-field score deltas with a clear "which strategy wins on which field" breakdown. **This is the most important screen — make it good.**
-
-### 5. Reproducibility
-
-- A single command runs a full 50-case eval from the CLI without the dashboard, and prints a summary table to stdout. Used in CI / for sharing results:
-
-  ```bash
-  bun run eval -- --strategy=cot --model=claude-haiku-4-5-20251001
-  ```
-
-- Every run pins the prompt content via a **content hash** so "prompt v6" is unambiguous. Changing any character in the prompt produces a new hash.
-
----
-
-## Hard Requirements
-
-1. **Tool use / structured output, not regex on model text.** If you `JSON.parse` raw model output without a schema-enforcing path, you fail this requirement.
-2. **Retry-with-error-feedback** loop, capped at 3, all attempts logged.
-3. **Prompt caching** working and verified — show `cache_read_input_tokens` increasing across runs in the dashboard.
-4. **Concurrency control** — no naïve `Promise.all`. Document (in `NOTES.md`) what your strategy does when Anthropic returns a 429.
-5. **Resumable runs** — kill the server mid-run, restart, resume. This must actually work and you must include a test for it.
-6. **Per-field metrics matched to field type** — exact, numeric-tolerant, fuzzy, set-F1 — used appropriately. A single "exact-match-everything" implementation fails this requirement.
-7. **Hallucination detection** with a documented method, even if simple.
-8. **Compare view** that surfaces real signal — not just two columns of numbers, but per-field deltas with a winner.
-9. **At least 8 tests**, including: schema-validation retry path, fuzzy med matching, set-F1 correctness on a tiny synthetic case, hallucination detector positive + negative, resumability, idempotency, rate-limit backoff (mock the SDK), prompt-hash stability.
-10. **No leaking the API key** to the browser. The web app talks only to Hono; only Hono talks to Anthropic.
-
----
-
-## Stretch Goals
-
-*Only if you have time — these are not required to pass.*
-
-- **Prompt diff view** that shows what changed between two prompt versions and which cases regressed.
-- **Active-learning hint**: surface the 5 cases with the highest disagreement between strategies — these are the cases most worth annotating better.
-- **Cost guardrail**: refuse to start a run whose projected cost exceeds a configurable cap (estimate from token counts before sending).
-- **Second model** (e.g. Sonnet 4.6) so the compare view also handles cross-model comparisons.
-
----
-
-## Constraints
-
-- **Synthetic data only.** Don't bring in real medical data, and don't put real patient info in test fixtures.
-- **Budget**: a full 50-case Haiku run on all three strategies should cost **under $1**. If your harness can't hit that, your caching or prompt design needs work.
-- **Time**: aim for **8–12 focused hours**. A polished 35-case version beats a buggy 50-case one.
-
----
-
-## How to Run
+## Quick start
 
 ```bash
-# 1. Install
+git clone <this-repo> test-evals
+cd test-evals
 bun install
-
-# 2. Configure
-echo "ANTHROPIC_API_KEY=sk-ant-..." > apps/server/.env
-
-# 3. Database (Postgres)
+docker compose up -d
 bun run db:push
-
-# 4. Dev (web + server)
-bun run dev
-
-# 5. In another shell — CLI eval
-bun run eval -- --strategy=zero_shot
+cp .env.example apps/server/.env       # then paste a real ANTHROPIC_API_KEY
+cp .env.example apps/web/.env          # trim to the NEXT_PUBLIC_SERVER_URL line
+./scripts/run-full-eval.sh             # full 3-strategy × 50-case eval, ~$0.55, ~10 min
 ```
 
-You'll need a Postgres instance running locally. Set `DATABASE_URL` in `apps/server/.env` (e.g. `postgres://postgres:postgres@localhost:5432/healosbench`).
+For the interactive dashboard: `./scripts/start-dev.sh` then open `http://localhost:3001`.
+
+For a free mock-mode sanity run (no API key needed): leave `USE_ANTHROPIC=0` in `apps/server/.env` and run `cd apps/server && bun run eval -- --strategy=zero_shot`.
+
+**Full setup, env, scripts, troubleshooting:** [`SETUP.md`](./SETUP.md).
+**Submission notes, results, what surprised me, what's next:** [`NOTES.md`](./NOTES.md).
+**Pre-build design docs** (idea → approach → lld → contracts → entities → runner-design): [`docs/`](./docs/).
 
 ---
 
-## What We're Looking For
+## Headline results
 
-- **Eval methodology taste.** The right metric for the right field. Honest reporting of failure modes (schema invalid, hallucinated, undergrounded). A compare view that would actually help you decide which prompt to ship.
-- **Prompt engineering judgement.** Three strategies that are *meaningfully* different, not three flavors of the same prompt. A short writeup in `NOTES.md` of what you saw and why one wins on which fields.
-- **LLM plumbing fluency.** Tool use, caching, retries, concurrency, idempotency — the things that separate a toy from a system you'd run in CI.
-- **Test signal.** Tests target the things that actually break: rate limits, validation failures, resumes, fuzzy matchers.
-- **A short `NOTES.md`** with: results table for the three strategies, what surprised you, what you'd build next, what you cut.
+50-case dataset, real Claude Haiku 4.5, Tier-2 fuzzy grounding ON:
 
-### What we're **not** looking for
+| Strategy   | Weighted F1 | Cost (USD) | Duration | Grounded-out |
+|------------|------------:|-----------:|---------:|-------------:|
+| zero_shot  | 0.7531      | $0.20      | 171s     | 8 / 50       |
+| few_shot   | 0.7417      | $0.21      | 149s     | 0 / 50       |
+| **cot**    | **0.7584**  | $0.21      | 177s     | 0 / 50       |
 
-- A pretty UI. Tailwind defaults are fine.
-- Multi-user auth, multi-tenant, deployment.
-- Hand-tuned prompts overfit to these 50 cases — we may swap the eval set.
+Per-field × strategy means + the surprising bits ("CoT was the only strategy that moved diagnoses"; "few-shot *hurt* `chief_complaint`") are in [`NOTES.md`](./NOTES.md).
 
 ---
 
-## Submission
+## Tech stack
 
-1. Push to a private repo and grant access, **or** zip the working tree (excluding `node_modules`).
-2. Include `NOTES.md` at the repo root.
-3. Include the output of one full 3-strategy CLI run (a `results/` folder or a paste in `NOTES.md`).
-4. Make sure `bun install && bun run eval -- --strategy=zero_shot` works from a clean clone.
+TypeScript-first monorepo on **Bun** with **Turborepo** orchestration. The backend is **Hono** running on Bun (`:8787`) with **Zod** validation, talking to **Claude Haiku 4.5** through **`@anthropic-ai/sdk`** using forced tool-use for schema-conformant output and `cache_control` for prompt caching; rate-limit handling, 5-in-flight concurrency, retry-with-feedback, and cross-run idempotency are custom-built (no Bottleneck/p-limit). Persistence is **Postgres 16** (Docker Compose) with **Drizzle ORM** + **Drizzle Kit** for the 13-table schema and migrations. The dashboard is **Next.js 16** (App Router, React 19, React Compiler) on `:3001`, styled with **Tailwind CSS 4**, with **TanStack React Form**, **Lucide**, **next-themes**, and **Sonner**. Validation runs a Zod schema check followed by Tier-2 fuzzy grounding (Levenshtein DP + 4-char anchor-token escape hatch); the evaluator uses ten atomic scorers (fuzzy / exact / ±tolerance / set-F1 / ICD partial credit). Tooling: **Bun's built-in test runner** (73 tests, fully in-memory), **Docker Compose** for local Postgres, **`@t3-oss/env-core`** for split server/client env validation, and bash scripts for the full-eval pipeline and dev-server orchestration.
 
-Good luck — and have fun.
+---
+
+## What was built — coverage of the brief's hard requirements
+
+| # | Requirement | Implementation |
+|---|---|---|
+| 1 | Tool use / structured output, not regex | `tool_choice: {type:"tool", name:"extract_clinical"}` forced in every strategy. `JSON.parse` is never called on raw model text. |
+| 2 | Retry-with-error-feedback, ≤ 3, all attempts logged | `RunnerService.runOneCase` loops `i:1..3`, validation errors injected as a `tool_result` turn for the next attempt. Every attempt = a row in the `attempts` table. |
+| 3 | Prompt caching, verified | `cache_control: {type:"ephemeral"}` on `system + tools` (verified against the [May-2026 caching docs](https://platform.claude.com/docs/en/docs/build-with-claude/prompt-caching)). `cache_read_input_tokens` is surfaced through `attempts.usage`. Honest caveat in NOTES §3: Haiku 4.5's 4096-token cache floor exceeds our ~775-token prefix, so reads stay at zero on this model — wire format is correct and ready to land hits on Sonnet 4.5 / Opus 4.x (1024-token floor). |
+| 4 | Concurrency + 429 handling | 5-in-flight via a 25-LOC inline async semaphore + `Promise.allSettled`. 429s caught at the adapter boundary, translated into a typed `RateLimitError` carrying `Retry-After`, then absorbed by `withRateLimitRetry` (≤ 4 retries, 30s cap). Sits *outside* the per-case validation budget so a rate-limit storm doesn't eat the 3-attempt retry budget. Documented in [`NOTES.md` § Concurrency & Rate Limiting](./NOTES.md). |
+| 5 | Resumable runs | `POST /api/v1/runs/:id/resume` re-processes only cases without a terminal `evaluations` row. Cross-run idempotency replay (content-addressed `idempotency_key` on `attempts`) short-circuits any successful attempt that landed pre-crash, so resume is safe even after partial-write failures. |
+| 6 | Per-field metrics matched to field type | 10 atomic scorers in `apps/server/src/evaluators/scorers.ts`: `chiefComplaintFuzzy`, `vitalsBpExact`, `vitalsHrTolerant`, `vitalsTempTolerant` (±0.2 °F), `vitalsSpo2Tolerant`, `medicationsSetF1` (with `BID ↔ twice daily` canonicalization), `diagnosesSetF1` (with ICD-10 partial credit 1.0 / 0.5 / 0.0), `planSetF1`, `followUpIntervalExact`, `followUpReasonFuzzy`. |
+| 7 | Hallucination detection | Tier-2 fuzzy grounding in `apps/server/src/validators/grounding.ts` — approximate substring matching via Levenshtein DP (threshold 0.55, tuned on real Haiku output) plus a 4-char anchor-token escape hatch that catches medical formalization (`"GERD"` matching `"reflux"`). Empirical false-positive rate on the 50-case run: 16% — all are short clinical labels formalized from lay symptoms. |
+| 8 | Compare view with real signal | `/compare` UI bound to `GET /api/v1/runs/compare?a=…&b=…`. Per-field deltas, per-case bucketing (regressed / unchanged / improved), winner-per-field. |
+| 9 | ≥ 8 tests, including the named list | **73 tests** in 4 files. Named list covered: schema-validation retry path ✓, fuzzy med matching ✓, set-F1 correctness ✓, hallucination detector pos + neg ✓, **resumability** ✓, idempotency ✓, **rate-limit backoff (mock SDK)** ✓, prompt-hash stability ✓. |
+| 10 | No API key in the browser | Split env via `@t3-oss/env-core`. `apps/web/.env` ships only `NEXT_PUBLIC_SERVER_URL`; `ANTHROPIC_API_KEY` lives in `apps/server/.env` and is consumed only by the Hono server. |
+
+---
+
+## Architecture
+
+```
+┌─────────────────────────┐    HTTP     ┌──────────────────────────────────────┐
+│  Next.js 16 dashboard   │ ─────────▶  │  Hono server  (apps/server  :8787)   │
+│  (apps/web  :3001)       │             │                                      │
+│  • Runs list             │             │  ┌────────────────────────────────┐  │
+│  • Run / case detail     │             │  │  RunnerService                 │  │
+│  • Compare view          │             │  │  • 5-in-flight semaphore        │  │
+└─────────────────────────┘             │  │  • per-case retry-with-feedback │  │
+                                          │  │  • 429 backoff (Retry-After)    │  │
+                                          │  │  • resumeRun(id)                │  │
+                                          │  └─────┬─────────────┬─────────────┘  │
+                                          │        ▼             ▼                │
+                                          │  ExtractorService  EvaluatorService   │
+                                          │   • forced tool-use   • 10 scorers    │
+                                          │   • Zod + Tier-2      • set-F1, fuzzy │
+                                          │     fuzzy grounding   • ICD partial   │
+                                          │   • cross-run                         │
+                                          │     idempotency                       │
+                                          └──┬───────────────┬────────────────────┘
+                                             ▼               ▼
+                                       ┌────────────┐  ┌──────────────────────┐
+                                       │ Anthropic  │  │ Postgres 16 (Drizzle)│
+                                       │ Haiku 4.5  │  │ 13 tables            │
+                                       │            │  │ runs / attempts /    │
+                                       │ tool-use + │  │ evaluations / scores │
+                                       │ caching    │  │ traces / prompts / … │
+                                       └────────────┘  └──────────────────────┘
+```
+
+### Key paths
+
+| Concern | File |
+|---|---|
+| Retry / concurrency / resume | `apps/server/src/services/runner.service.ts` |
+| Single-attempt extractor + idempotency | `apps/server/src/services/extractor.service.ts` |
+| Per-field scoring | `apps/server/src/services/evaluator.service.ts`, `apps/server/src/evaluators/scorers.ts` |
+| Compare logic | `apps/server/src/services/compare.service.ts` |
+| Validators (schema → grounding) | `apps/server/src/validators/{chain,schema,grounding,feedback}.ts` |
+| Strategies | `apps/server/src/llm/strategies/{zero-shot,few-shot,cot}.ts` |
+| Real / mock LLM adapters | `apps/server/src/llm/{anthropic-adapter,mock-adapter,select-adapter}.ts` |
+| API routes | `apps/server/src/api/runs.ts` |
+| Drizzle schema | `packages/db/src/schema/eval.ts` (13 tables) |
+| UI pages | `apps/web/src/app/{page,runs/new,runs/[id],runs/[id]/cases/[caseId],compare}/page.tsx` |
+
+---
+
+## API surface
+
+| Method | Path | Returns |
+|---|---|---|
+| `POST` | `/api/v1/runs` | Synchronous: run a strategy on the dataset, return summary |
+| `GET`  | `/api/v1/runs?limit=50` | Paginated runs list |
+| `GET`  | `/api/v1/runs/compare?a=&b=` | Per-field deltas + winner |
+| `GET`  | `/api/v1/runs/:id` | Run + attempts |
+| `GET`  | `/api/v1/runs/:id/cases/:caseId` | Transcript + gold + predicted + scores |
+| `POST` | `/api/v1/runs/:id/resume` | Continue a previously-started run; safe after server crash |
+
+Curl examples + the full request body shape are in [`SETUP.md`](./SETUP.md#9-api-surface).
+
+---
+
+## Tests
+
+```bash
+cd apps/server
+bun test    # 73 tests, ~200 ms
+```
+
+Four files, all in-memory (no DB, no network):
+
+| File | Coverage |
+|---|---|
+| `harness.test.ts` | Schema validator, Tier-2 grounding (substring + anchor-token), feedback collector, scorers, idempotency-key, validator chain |
+| `retry-loop.test.ts` | Retry-with-feedback end-to-end through `ExtractorService` + `MockLLMAdapter`, plus idempotency replay |
+| `extended.test.ts` | 3-strategy registry, all 6 fields scored, prompt-cache visibility, adapter selection |
+| `concurrency-resume.test.ts` | 429 backoff (mock SDK), `withRateLimitRetry` budget, semaphore primitive, `completedCaseIds` resume filter, partial-crash idempotency replay |
+
+---
+
+## Repo layout
+
+```
+test-evals/
+├── apps/
+│   ├── server/        Hono backend on :8787
+│   │   └── src/
+│   │       ├── api/, cli/, data/, evaluators/, llm/, services/,
+│   │       ├── validators/, utils/, __tests__/
+│   └── web/           Next.js 16 dashboard on :3001
+├── packages/
+│   ├── db/            Postgres schema + repositories (Drizzle ORM)
+│   ├── env/, ui/, config/
+├── data/
+│   ├── transcripts/   50 synthetic clinical transcripts
+│   ├── gold/          ground-truth extractions
+│   └── schema.json
+├── scripts/
+│   ├── start-dev.sh         server + web together with log tailing
+│   ├── run-full-eval.sh     full 3-strategy submission run
+│   ├── aggregate-runs.sh    refresh artifacts from existing run_ids
+│   └── db.sh                local Postgres helper
+├── docker-compose.yml
+├── README.md      (this file)
+├── SETUP.md       clone-to-run setup guide
+└── NOTES.md       results, what surprised me, what's next
+```
+
+---
+
+## The brief
+
+The original take-home brief lives here for context — the assignment was to build a repeatable evaluation harness for an LLM that turns clinical transcripts into structured JSON, with three prompt strategies, retry-with-feedback, prompt caching, per-field metrics, hallucination detection, a compare dashboard, resumable runs, and ≥ 8 tests. Synthetic data only, ~8–12 hours, full 3-strategy run under $1.
+
+Full requirement breakdown, dataset description, hard requirements, stretch goals, and constraints are in the [original assessment README](https://github.com/medinoteorg/test-evals).
+
+---
+
+## License + attribution
+
+Synthetic data only — no PHI. Built solo against the assessment brief. Submission notes, results, design tradeoffs, and future work are in [`NOTES.md`](./NOTES.md).
