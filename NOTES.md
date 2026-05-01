@@ -63,7 +63,6 @@ Pulled directly from the §1 / §2 tables — N=50, so each delta below is one s
 - **Land actual cache hits.** Two paths, both small. (a) Switch the eval model to Sonnet 4.5 or Opus 4.x (both have a 1024-token cache floor — our 775-token `system + tools` prefix clears them immediately, and we'd see `cache_read_input_tokens > 0` from case 2 onward without touching the prompt). (b) Stay on Haiku 4.5 and pad the system block with stable extraction-rules documentation until the prefix crosses 4096 tokens. Path (a) is one config change; path (b) earns ~$0.05/run at full volume but improves prompt clarity at the same time.
 - **Bootstrap CI on per-field deltas** in the compare view. Current winner is threshold-based; at N=50 a +1 pp F1 spread is inside noise.
 - **Real concurrency** (bottleneck @ 5 in-flight + ramp-up). V2 is sequential — full eval is 9 min wall when it could be 2.
-- **POST /runs/:id/resume** endpoint. Idempotency replay already works (cross-run deduplication landed in commit `a4bc712`); just needs the route.
 - **CoVe Strategy 4** — extract → independently verify per field → revise. Natural complement to CoT once Tier-2 grounding makes per-field verification cheap.
 
 ## 6. What you cut
