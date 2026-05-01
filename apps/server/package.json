@@ -7,9 +7,12 @@
     "check-types": "tsc -b",
     "compile": "bun build --compile --minify --sourcemap --bytecode ./src/index.ts --outfile server",
     "dev": "bun run --hot src/index.ts",
-    "start": "bun run dist/index.mjs"
+    "start": "bun run dist/index.mjs",
+    "eval": "bun run src/cli/eval.ts",
+    "test": "bun test"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.92.0",
     "@test-evals/auth": "workspace:*",
     "@test-evals/db": "workspace:*",
     "@test-evals/env": "workspace:*",

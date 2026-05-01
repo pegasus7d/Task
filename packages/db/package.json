@@ -2,12 +2,10 @@
   "name": "@test-evals/db",
   "type": "module",
   "exports": {
-    ".": {
-      "default": "./src/index.ts"
-    },
-    "./*": {
-      "default": "./src/*.ts"
-    }
+    ".":              { "default": "./src/index.ts" },
+    "./schema":       { "default": "./src/schema/index.ts" },
+    "./repositories": { "default": "./src/repositories/index.ts" },
+    "./*":            { "default": "./src/*.ts" }
   },
   "scripts": {
     "db:push": "drizzle-kit push",
