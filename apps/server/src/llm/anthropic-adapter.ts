@@ -10,7 +10,21 @@
 
 import Anthropic from "@anthropic-ai/sdk";
 
-import type { AdapterCallResult, ILLMAdapter, MessagePayload } from "./types";
+import { RateLimitError, type AdapterCallResult, type ILLMAdapter, type MessagePayload } from "./types";
+
+/**
+ * Translate Anthropic's `Retry-After` header (or a fallback) into ms. Header
+ * may be either an integer of seconds OR an HTTP-date; we handle the common
+ * integer form and fall back to a 1-second default.
+ */
+function parseRetryAfterMs(headers: Record<string, string> | undefined): number {
+  const raw = headers?.["retry-after"] ?? headers?.["Retry-After"];
+  if (!raw) return 1_000;
+  const seconds = Number(raw);
+  if (Number.isFinite(seconds) && seconds > 0) return Math.ceil(seconds * 1_000);
+  const dateMs = Date.parse(raw);
+  return Number.isFinite(dateMs) ? Math.max(0, dateMs - Date.now()) : 1_000;
+}
 
 export class AnthropicAdapter implements ILLMAdapter {
   readonly id = "anthropic";
@@ -23,15 +37,26 @@ export class AnthropicAdapter implements ILLMAdapter {
   }
 
   async call(payload: MessagePayload, _caseId: string): Promise<AdapterCallResult> {
-    const resp = await this.client.messages.create({
-      model:        this.model,
-      max_tokens:   payload.max_tokens,
-      temperature:  payload.temperature,
-      system:       payload.system as never,        // already in Anthropic shape
-      tools:        payload.tools as never,
-      tool_choice:  payload.tool_choice,
-      messages:     payload.messages as never,
-    });
+    let resp;
+    try {
+      resp = await this.client.messages.create({
+        model:        this.model,
+        max_tokens:   payload.max_tokens,
+        temperature:  payload.temperature,
+        system:       payload.system as never,        // already in Anthropic shape
+        tools:        payload.tools as never,
+        tool_choice:  payload.tool_choice,
+        messages:     payload.messages as never,
+      });
+    } catch (err) {
+      // Translate Anthropic's 429 into a typed RateLimitError so the runner's
+      // retry-on-429 path is adapter-agnostic. Other errors propagate unchanged.
+      if (err instanceof Anthropic.APIError && err.status === 429) {
+        const headers = (err as unknown as { headers?: Record<string, string> }).headers;
+        throw new RateLimitError(parseRetryAfterMs(headers), err);
+      }
+      throw err;
+    }
 
     const toolUse = resp.content.find((b) => b.type === "tool_use");
     if (!toolUse || toolUse.type !== "tool_use") {

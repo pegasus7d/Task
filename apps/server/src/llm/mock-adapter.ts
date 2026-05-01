@@ -11,14 +11,15 @@
 import type { ClinicalExtraction } from "../data/clinical-schema";
 import type { CaseRecord } from "../data/dataset-loader";
 import { newId } from "../utils/ids";
-import type { AdapterCallResult, ILLMAdapter, MessagePayload } from "./types";
+import { RateLimitError, type AdapterCallResult, type ILLMAdapter, type MessagePayload } from "./types";
 
 /** What kind of response the mock should return on a given call. */
 export type ScriptedResponse =
-  | { kind: "tool_use" }                 // succeed (with noisify)
-  | { kind: "schema_invalid" }            // return malformed object
-  | { kind: "grounding_failed" }          // valid schema but contains a fabricated value
-  | { kind: "throw"; message: string };   // simulate adapter exception
+  | { kind: "tool_use" }                                      // succeed (with noisify)
+  | { kind: "schema_invalid" }                                // return malformed object
+  | { kind: "grounding_failed" }                              // valid schema but contains a fabricated value
+  | { kind: "throw"; message: string }                        // simulate adapter exception
+  | { kind: "rate_limit_429"; retryAfterMs?: number };        // simulate Anthropic 429
 
 /** Inject a small distortion vs. gold so scorers produce non-trivial deltas. */
 function noisify(gold: ClinicalExtraction): ClinicalExtraction {
@@ -127,6 +128,9 @@ export class MockLLMAdapter implements ILLMAdapter {
 
     if (next.kind === "throw") {
       throw new Error(next.message);
+    }
+    if (next.kind === "rate_limit_429") {
+      throw new RateLimitError(next.retryAfterMs ?? 50);   // 50ms default keeps tests fast
     }
 
     let predicted: ClinicalExtraction;

@@ -61,3 +61,19 @@ export interface ILLMAdapter {
   readonly id: string;
   call(payload: MessagePayload, caseId: string): Promise<AdapterCallResult>;
 }
+
+/**
+ * Thrown by an adapter (or its wrapper) when the upstream LLM returns a 429.
+ * Carries the suggested wait in milliseconds so the runner can respect
+ * Anthropic's `Retry-After` header instead of blind-backing-off.
+ */
+export class RateLimitError extends Error {
+  readonly retryAfterMs: number;
+  readonly cause?:       unknown;
+  constructor(retryAfterMs: number, cause?: unknown) {
+    super(`Anthropic rate-limited (429); retry after ${retryAfterMs}ms`);
+    this.name         = "RateLimitError";
+    this.retryAfterMs = retryAfterMs;
+    this.cause        = cause;
+  }
+}

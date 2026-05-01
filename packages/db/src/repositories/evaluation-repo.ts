@@ -87,4 +87,17 @@ export class EvaluationRepository {
       .limit(1);
     return row ?? null;
   }
+
+  /**
+   * Set of case_ids that have a terminal `evaluations` row (any final_status).
+   * Used by RunnerService.resumeRun to skip cases that already finished — both
+   * successes and unrecoverable failures, since neither should be re-run.
+   */
+  async completedCaseIds(runId: RunId): Promise<Set<CaseId>> {
+    const rows = await db
+      .select({ caseId: evaluations.caseId })
+      .from(evaluations)
+      .where(eq(evaluations.runId, runId));
+    return new Set(rows.map((r) => r.caseId as CaseId));
+  }
 }

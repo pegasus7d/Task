@@ -149,6 +149,34 @@ runsRouter.get("/compare", async (c) => {
   }
 });
 
+/**
+ * POST /api/v1/runs/:id/resume
+ *
+ * Continue a previously-started run. Skips any case that already has a
+ * terminal `evaluations` row. Idempotency replay (extractor.service.ts)
+ * prevents double-charge if a successful attempt landed but the
+ * `evaluations` row didn't make it before the crash.
+ */
+runsRouter.post("/:id/resume", async (c) => {
+  const runId = c.req.param("id") as RunId;
+  const existing = await runRepo.findById(runId);
+  if (!existing) {
+    return c.json(
+      { type: "/errors/not-found", title: "Run not found", status: 404, detail: runId },
+      404,
+    );
+  }
+  try {
+    const summary = await runner.resumeRun(runId);
+    return c.json({ run_id: runId, status: "completed", summary }, 200);
+  } catch (err) {
+    return c.json(
+      { type: "/errors/internal", title: "Resume failed", status: 500, detail: (err as Error).message },
+      500,
+    );
+  }
+});
+
 /** GET /api/v1/runs/:id — single run + attempts list. */
 runsRouter.get("/:id", async (c) => {
   const runId = c.req.param("id") as RunId;
