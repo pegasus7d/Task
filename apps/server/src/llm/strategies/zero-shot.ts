@@ -64,9 +64,12 @@ export const zeroShotStrategy: IStrategy = {
     }
 
     return {
-      // Cache breakpoints sit only on the stable prefix (tools + system).
-      // Default 5m ephemeral TTL is GA — the 1h variant needs the
-      // `extended-cache-ttl-2025-04-11` beta header which we do not send.
+      // Cache breakpoints sit only on the stable prefix (tools + system),
+      // matching the docs' "static prefix, varying suffix" pattern (the
+      // transcript varies per request). Both 5m default and 1h `ttl` are GA,
+      // no beta header. Haiku 4.5's cache floor is 4096 input tokens, so on
+      // this model these breakpoints register but the API no-ops them; see
+      // NOTES §3 for the full discussion.
       system: [{ type: "text", text: SYSTEM_BODY,
                  cache_control: { type: "ephemeral" } }],
       tools:  [{ ...EXTRACT_CLINICAL_TOOL,
