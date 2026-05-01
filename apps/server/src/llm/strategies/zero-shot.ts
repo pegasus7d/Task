@@ -64,12 +64,13 @@ export const zeroShotStrategy: IStrategy = {
     }
 
     return {
-      // Cache breakpoint #1: tools + system shared across ALL strategies + cases.
-      // V2 verifies cache via cache_read_input_tokens > 0 on subsequent calls.
+      // Cache breakpoints sit only on the stable prefix (tools + system).
+      // Default 5m ephemeral TTL is GA — the 1h variant needs the
+      // `extended-cache-ttl-2025-04-11` beta header which we do not send.
       system: [{ type: "text", text: SYSTEM_BODY,
-                 cache_control: { type: "ephemeral", ttl: "1h" } }],
+                 cache_control: { type: "ephemeral" } }],
       tools:  [{ ...EXTRACT_CLINICAL_TOOL,
-                 cache_control: { type: "ephemeral", ttl: "1h" } }],
+                 cache_control: { type: "ephemeral" } }],
       messages,
       tool_choice: { type: "tool", name: "extract_clinical" },
       temperature: 0,

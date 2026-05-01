@@ -363,7 +363,7 @@ export const attempts = pgTable(
   },
   (t) => ({
     pk:                primaryKey({ columns: [t.runId, t.caseId, t.attemptIdx] }),
-    idempotencyUnique: uniqueIndex("attempts_idempotency_key").on(t.idempotencyKey),
+    idempotencyLookup: index("attempts_idempotency_key").on(t.idempotencyKey),
     runCaseIdx:        index("attempts_run_case").on(t.runId, t.caseId, t.attemptIdx),
     resumeScanIdx:     index("attempts_resume_scan")
                          .on(t.runId, t.status, t.heartbeatAt)

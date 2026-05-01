@@ -70,7 +70,6 @@ export class ExtractorService {
     });
 
     const idempotencyKey: Sha256Hex = computeIdempotencyKey({
-      run_id:      input.run_id,
       model:       "claude-haiku-4-5-20251001" as const,
       prompt_hash: input.prompt_hash,
       tools_hash:  input.tools_hash,

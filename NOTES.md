@@ -32,11 +32,17 @@
 - **Grounding**: skipped (substring would false-positive on paraphrase)
 - **Sample size**: all 50 cases
 - **Retry budget**: 3 attempts per case with structured feedback
-- **Caching**: 1-hour TTL `cache_control` on tools + system + strategy suffix
+- **Caching**: default-TTL (5m) `cache_control` on the stable prefix only — `system` + `tools`. The 1h TTL variant was dropped because it needs the `extended-cache-ttl-2025-04-11` beta header which the adapter does not send; that mismatch is what produced `cache_read_input_tokens=0` on the original run captured in §1.
 
-## 4. What surprised you
+## 4. What surprised me
 
-(fill in by hand — TODO)
+Pulled directly from the §1 / §2 tables — N=50, so each delta below is one strategy on one field, not a population claim.
+
+- **CoT was the only strategy that moved diagnoses.** `diagnoses_set_f1` jumps from 0.508 (zero_shot) / 0.499 (few_shot) to **0.579 (cot)** — a +7 pp lift over zero_shot, +8 pp over few_shot. The `<thinking>` block seems to help most where the model has to enumerate multiple items and pick an ICD code; on flatter fields (vitals, plan) CoT does nothing.
+- **Few-shot *hurt* chief_complaint.** 0.407 zero_shot → **0.316 few_shot** (−9 pp). My read: the three exemplars use a particular phrasing register ("sore throat for four days", "feeling off and dizzy") and the model anchors to that style instead of paraphrasing the actual case transcript. Few-shot won on `follow_up_reason_fuzzy` (+4 pp), so the bias isn't uniform — it punishes fields where the gold phrasing is idiosyncratic.
+- **Vitals are not an evaluation signal.** BP / HR / SpO2 all sit at exactly **1.000** across every strategy; temp is 0.98 everywhere. Either the dataset's vital-sign extraction is trivial for Haiku 4.5 or my scorers are too lax. At N=50 I can't tell which, but it means three of ten scorers carry zero discriminating information.
+- **Fuzzy free-text scorers are the floor.** `chief_complaint_fuzzy` (0.32–0.41) and `follow_up_reason_fuzzy` (0.34–0.37) are the lowest cells in the matrix — well below the set-F1 fields (0.50–0.72). Token-set ratio is unforgiving when the gold is a single short phrase; a single synonym swap halves the score. A semantic-similarity scorer (or LLM-judge) is the right next move on these fields.
+- **Strategy choice is a quality decision, not a cost decision.** Total cost spread is **$0.2036 → $0.2123** across the three strategies — a 4% band on a $0.20 base. CoT is not measurably more expensive than zero_shot here despite the extra `<thinking>` tokens, because tool-use output dominates and the input prompt is short. So picking CoT for the +1 pp weighted-F1 lift costs essentially nothing at this volume.
 
 ## 5. What you would build next
 

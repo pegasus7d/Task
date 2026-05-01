@@ -71,9 +71,9 @@ export const cotStrategy: IStrategy = {
 
     return {
       system: [{ type: "text", text: SYSTEM_BODY,
-                 cache_control: { type: "ephemeral", ttl: "1h" } }],
+                 cache_control: { type: "ephemeral" } }],
       tools:  [{ ...EXTRACT_CLINICAL_TOOL,
-                 cache_control: { type: "ephemeral", ttl: "1h" } }],
+                 cache_control: { type: "ephemeral" } }],
       messages,
       tool_choice: { type: "tool", name: "extract_clinical" },
       temperature: 0,

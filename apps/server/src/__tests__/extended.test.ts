@@ -167,32 +167,34 @@ describe("scorer coverage (Priority 4 — all 6 fields scored)", () => {
 // ─── Prompt caching visibility (Priority 3) ─────────────────────────────────
 
 describe("prompt caching (Priority 3)", () => {
-  test("zero_shot has cache_control on system + tools", () => {
+  test("zero_shot has cache_control on system + tools (default 5m ephemeral)", () => {
     const p = zeroShotStrategy.buildMessages({
       transcriptId: "x", transcript: "y", attemptIdx: 1, prevFeedback: null,
     });
     const sys = p.system[0];
     if (sys?.type === "text") {
-      expect(sys.cache_control).toEqual({ type: "ephemeral", ttl: "1h" });
+      expect(sys.cache_control).toEqual({ type: "ephemeral" });
     } else {
       throw new Error("expected text block in system");
     }
-    expect(p.tools[0]?.cache_control).toEqual({ type: "ephemeral", ttl: "1h" });
+    expect(p.tools[0]?.cache_control).toEqual({ type: "ephemeral" });
   });
 
-  test("few_shot has 2 cache breakpoints (shared + strategy suffix)", () => {
+  test("few_shot caches only the stable prefix (system + tools), NOT examples or transcript", () => {
     const p = fewShotStrategy.buildMessages({
       transcriptId: "x", transcript: "y", attemptIdx: 1, prevFeedback: null,
     });
     const sys = p.system[0];
     if (sys?.type === "text") {
-      expect(sys.cache_control).toBeDefined();   // breakpoint #1
+      expect(sys.cache_control).toBeDefined();
     }
-    const examplesBlock = p.messages[0]?.content[0];
-    if (examplesBlock?.type === "text") {
-      expect(examplesBlock.cache_control).toBeDefined();  // breakpoint #2
-    } else {
-      throw new Error("expected examples text block");
+    expect(p.tools[0]?.cache_control).toBeDefined();
+    // Examples and transcript must NOT carry cache_control — breakpoint sits
+    // before any user-message content.
+    for (const block of p.messages[0]?.content ?? []) {
+      if (block.type === "text") {
+        expect(block.cache_control).toBeUndefined();
+      }
     }
   });
 

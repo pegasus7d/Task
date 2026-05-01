@@ -204,7 +204,6 @@ describe("prompt-hash stability + idempotency key (brief tests #6, #8)", () => {
 
   test("idempotency_key includes attempt_idx — different idx → different key", () => {
     const base = {
-      run_id:      "run_x" as never,
       model:       "claude-haiku-4-5-20251001" as const,
       prompt_hash: "p" as never,
       tools_hash:  "t" as never,
@@ -222,7 +221,6 @@ describe("prompt-hash stability + idempotency key (brief tests #6, #8)", () => {
 
   test("idempotency_key deterministic on same inputs", () => {
     const args = {
-      run_id:      "run_x" as never,
       model:       "claude-haiku-4-5-20251001" as const,
       prompt_hash: "p" as never,
       tools_hash:  "t" as never,
@@ -232,6 +230,20 @@ describe("prompt-hash stability + idempotency key (brief tests #6, #8)", () => {
       attempt_idx: 1 as 1 | 2 | 3,
     };
     expect(computeIdempotencyKey(args)).toBe(computeIdempotencyKey(args));
+  });
+
+  test("idempotency_key differs when prompt_hash changes (strategy switch)", () => {
+    const base = {
+      model:       "claude-haiku-4-5-20251001" as const,
+      tools_hash:  "t" as never,
+      temperature: 0,
+      max_tokens:  2048,
+      case_id:     "case_001",
+      attempt_idx: 1 as 1 | 2 | 3,
+    };
+    const k1 = computeIdempotencyKey({ ...base, prompt_hash: "zero" as never });
+    const k2 = computeIdempotencyKey({ ...base, prompt_hash: "few"  as never });
+    expect(k1).not.toBe(k2);
   });
 });
 

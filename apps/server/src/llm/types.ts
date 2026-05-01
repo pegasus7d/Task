@@ -11,7 +11,7 @@ import type { ValidationFeedback } from "../validators/feedback";
 
 export type ContentBlock =
   | { type: "text"; text: string;
-      cache_control?: { type: "ephemeral"; ttl: "5m" | "1h" } }
+      cache_control?: { type: "ephemeral"; ttl?: "5m" | "1h" } }
   | { type: "tool_use"; id: string; name: string; input: unknown }
   | { type: "tool_result"; tool_use_id: string; is_error?: boolean; content: string };
 
@@ -21,7 +21,7 @@ export interface MessagePayload {
     name:         string;
     description:  string;
     input_schema: object;
-    cache_control?: { type: "ephemeral"; ttl: "5m" | "1h" };
+    cache_control?: { type: "ephemeral"; ttl?: "5m" | "1h" };
   }>;
   messages:    Array<{ role: "user" | "assistant"; content: ContentBlock[] }>;
   tool_choice: { type: "tool"; name: string };

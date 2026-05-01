@@ -104,9 +104,9 @@ export const fewShotStrategy: IStrategy = {
       {
         role: "user",
         content: [
-          // Cache breakpoint #2: examples shared across all 50 cases of this strategy.
-          { type: "text", text: EXAMPLES_BLOCK,
-            cache_control: { type: "ephemeral", ttl: "1h" } },
+          // Examples are stable across cases but per spec we cache only the
+          // system + tools prefix; no breakpoint here.
+          { type: "text", text: EXAMPLES_BLOCK },
           { type: "text", text: `<transcript>\n${ctx.transcript}\n</transcript>` },
         ],
       },
@@ -125,11 +125,10 @@ export const fewShotStrategy: IStrategy = {
     }
 
     return {
-      // Cache breakpoint #1: shared across all strategies + all cases.
       system: [{ type: "text", text: SYSTEM_BODY,
-                 cache_control: { type: "ephemeral", ttl: "1h" } }],
+                 cache_control: { type: "ephemeral" } }],
       tools:  [{ ...EXTRACT_CLINICAL_TOOL,
-                 cache_control: { type: "ephemeral", ttl: "1h" } }],
+                 cache_control: { type: "ephemeral" } }],
       messages,
       tool_choice: { type: "tool", name: "extract_clinical" },
       temperature: 0,

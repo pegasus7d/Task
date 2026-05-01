@@ -5,7 +5,7 @@
 
 import { createHash } from "node:crypto";
 import type {
-  AttemptIdx, CaseId, ModelId, RunId, Sha256Hex,
+  AttemptIdx, CaseId, ModelId, Sha256Hex,
 } from "@test-evals/db/repositories";
 
 export function sha256(s: string): Sha256Hex {
@@ -31,11 +31,10 @@ function sortKeys(value: unknown): unknown {
 
 export function computeIdempotencyKey(parts: {
   /**
-   * V1 includes run_id so re-runs don't collide on attempts_idempotency_key
-   * UNIQUE. V2 removes it once `IdempotencyAdapter` (contracts §9.1) is in
-   * place — runner-design.md §10.1 explicitly defers idempotency.
+   * Content-addressed across runs: same (model, prompt, tools, sampling, case,
+   * attempt_idx) → same key, so a later run can replay a prior successful
+   * attempt instead of re-calling the LLM. run_id is intentionally excluded.
    */
-  run_id:       RunId;
   model:        ModelId;
   prompt_hash:  Sha256Hex;
   tools_hash:   Sha256Hex;
@@ -45,7 +44,6 @@ export function computeIdempotencyKey(parts: {
   attempt_idx:  AttemptIdx;
 }): Sha256Hex {
   return sha256([
-    parts.run_id,
     parts.model, parts.prompt_hash, parts.tools_hash,
     parts.temperature.toFixed(6), String(parts.max_tokens),
     parts.case_id, String(parts.attempt_idx),
