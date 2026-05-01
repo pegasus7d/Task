@@ -9,7 +9,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { runValidatorChain } from "../validators/chain";
-import { groundingValidator } from "../validators/grounding";
+import { groundingValidator, fuzzySubstringSimilarity, GROUNDING_THRESHOLD } from "../validators/grounding";
 import { schemaValidator } from "../validators/schema";
 import { collectFeedback, toValidationFeedback } from "../validators/feedback";
 import { ALL_SCORERS, planSetF1, vitalsBpExact, chiefComplaintFuzzy } from "../evaluators/scorers";
@@ -55,7 +55,7 @@ describe("schema validator (brief test #1 prerequisite)", () => {
 
 // ─── 2. Grounding validator: hallucination detection ± (brief test #4) ──────
 
-describe("grounding validator (brief test #4)", () => {
+describe("grounding validator (brief test #4 — Tier-2 fuzzy)", () => {
   test("positive: every leaf string is in transcript → no flags", () => {
     const r = groundingValidator.validate(GOLD, TRANSCRIPT);
     expect(r.grounding_failed).toBe(false);
@@ -73,12 +73,94 @@ describe("grounding validator (brief test #4)", () => {
     expect(r.grounding_failed).toBe(true);
     expect(r.hallucination_count).toBe(1);
     expect(r.errors[0]?.kind).toBe("grounding_substring_miss");
+    expect(r.errors[0]?.evidence?.similarity).toBeLessThan(GROUNDING_THRESHOLD);
   });
 
   test("skips numeric vitals fields (formatting differs)", () => {
     const r = groundingValidator.validate(GOLD, TRANSCRIPT);
-    // vitals.bp/hr/temp_f/spo2 are in SKIP_PATHS → never trigger errors.
     expect(r.errors.find((e) => e.field_path.startsWith("vitals."))).toBeUndefined();
+  });
+
+  test("Tier-2: paraphrase passes — predicted leaf reformats transcript wording", () => {
+    // Transcript: "I've been having a really bad sore throat for like four days"
+    // Predicted:  "sore throat for four days"  (tighter wording)
+    // Tier-1 (exact substring) would FAIL this. Tier-2 should accept.
+    const transcript = "Patient: I've been having a really bad sore throat for like four days now.";
+    const pred: ClinicalExtraction = {
+      ...GOLD,
+      chief_complaint: "sore throat for four days",
+      medications: [], diagnoses: [], plan: [],   // strip fields that aren't in transcript
+    };
+    const r = groundingValidator.validate(pred, transcript);
+    expect(r.grounding_failed).toBe(false);
+  });
+
+  test("Tier-2: real fabrication still fails despite shared common tokens", () => {
+    const transcript = "Patient: My ear has been hurting for two weeks.";
+    const pred: ClinicalExtraction = {
+      ...GOLD,
+      chief_complaint: "severe migraine with aura",
+      medications: [], diagnoses: [], plan: [],
+    };
+    const r = groundingValidator.validate(pred, transcript);
+    expect(r.grounding_failed).toBe(true);
+  });
+
+  test("fuzzySubstringSimilarity: identical → 1.0", () => {
+    expect(fuzzySubstringSimilarity("hello", "say hello world").similarity).toBe(1);
+  });
+
+  test("fuzzySubstringSimilarity: completely different → low", () => {
+    const r = fuzzySubstringSimilarity("xyzabc", "the quick brown fox");
+    expect(r.similarity).toBeLessThan(0.5);
+  });
+
+  test("fuzzySubstringSimilarity: 1-edit difference → high", () => {
+    // "ibuprofin" → closest "ibuprofen" (1 substitution / 9 chars ≈ 0.89)
+    const r = fuzzySubstringSimilarity("ibuprofin", "take ibuprofen 400 mg");
+    expect(r.similarity).toBeGreaterThan(0.85);
+  });
+
+  test("Tier-2: empirical paraphrase (case_001-shaped) clears 0.55 threshold", () => {
+    const r = fuzzySubstringSimilarity(
+      "Sore throat for four days and nasal congestion",
+      "Patient: I've had a sore throat for about four days, and now my nose is congested.",
+    );
+    expect(r.similarity).toBeGreaterThanOrEqual(GROUNDING_THRESHOLD);
+  });
+
+  test("Tier-2: invented plan item (case_001 'Increase fluid intake') still fails", () => {
+    const r = fuzzySubstringSimilarity(
+      "Increase fluid intake",
+      "Doctor: vitals taken at intake. Take ibuprofen for the fever.",
+    );
+    expect(r.similarity).toBeLessThan(GROUNDING_THRESHOLD);
+  });
+
+  test("Tier-2 anchor-token: medical formalization passes via shared 4+ char token", () => {
+    // Char-level fuzzy fails (sim ≈ 0.34) but "reflux" appears verbatim,
+    // so the anchor-token path accepts.
+    const transcript = "Doctor: how have your reflux symptoms been?";
+    const pred: ClinicalExtraction = {
+      ...GOLD,
+      diagnoses: [{ description: "Gastroesophageal reflux disease (GERD)" }],
+      medications: [], plan: [], chief_complaint: "reflux symptoms",
+    };
+    const r = groundingValidator.validate(pred, transcript);
+    expect(r.errors.find((e) => e.field_path.startsWith("diagnoses"))).toBeUndefined();
+  });
+
+  test("Tier-2 anchor-token: pure abbreviation with no shared token still fails", () => {
+    // Predicted "Insomnia" + transcript only mentions "can't sleep" → no
+    // 4+ char overlap → flagged as not grounded.
+    const transcript = "Patient: I can't sleep at night.";
+    const pred: ClinicalExtraction = {
+      ...GOLD,
+      diagnoses: [{ description: "Insomnia" }],
+      medications: [], plan: [], chief_complaint: "trouble sleeping at night",
+    };
+    const r = groundingValidator.validate(pred, transcript);
+    expect(r.errors.find((e) => e.field_path === "diagnoses[0].description")).toBeDefined();
   });
 });
 

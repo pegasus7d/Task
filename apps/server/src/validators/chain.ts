@@ -8,7 +8,12 @@ import { schemaValidator } from "./schema";
 import type { ValidationResult } from "./types";
 
 export interface ChainOptions {
-  skipGrounding?: boolean;       // V1 demo: paraphrased gold + substring-only grounding always fails
+  /**
+   * Escape hatch — leave grounding off. Defaults to false now that the
+   * grounding validator is fuzzy (Tier-2). The flag exists so the smoke
+   * tests + idempotency probes can run in pure-schema mode if needed.
+   */
+  skipGrounding?: boolean;
 }
 
 export function runValidatorChain(

@@ -11,9 +11,12 @@
 # message instead of burning $$$ on a misconfigured run.
 #
 # Usage:
-#   ./scripts/run-full-eval.sh                  # full 50-case × 3 strategies
-#   ./scripts/run-full-eval.sh --sample 5       # smaller sanity run
-#   ./scripts/run-full-eval.sh --no-skip-grounding   # exercise grounding
+#   ./scripts/run-full-eval.sh                # full 50-case × 3 strategies
+#   ./scripts/run-full-eval.sh --sample 5     # smaller sanity run
+#   ./scripts/run-full-eval.sh --skip-grounding  # disable Tier-2 fuzzy gate
+#
+# Grounding (Tier-2 fuzzy) runs by default — it's the headline hallucination
+# gate. Pass --skip-grounding only for smoke tests / pure-schema probes.
 #
 # Estimated cost (full run): ~$0.30–0.60 depending on cache hit rate.
 # Estimated time:            ~10 min sequential.
@@ -28,7 +31,7 @@ RESULTS="$ROOT/results"
 
 # ─── Args ───────────────────────────────────────────────────────────────────
 SAMPLE=""
-SKIP_GROUNDING="--skip-grounding"
+SKIP_GROUNDING=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -37,8 +40,8 @@ while [[ $# -gt 0 ]]; do
       SAMPLE="$1"
       shift
       ;;
-    --no-skip-grounding)
-      SKIP_GROUNDING=""
+    --skip-grounding)
+      SKIP_GROUNDING="--skip-grounding"
       shift
       ;;
     -h|--help)
@@ -281,7 +284,7 @@ $(echo "$PER_FIELD_TSV" | awk -F'\t' '{ printf "| %s | %s | %s | %s |\n", $1, $2
 
 - **Model**: \`claude-haiku-4-5-20251001\`
 - **Adapter**: real Anthropic SDK (\`USE_ANTHROPIC=1\`)
-- **Grounding**: $([ -z "$SKIP_GROUNDING" ] && echo "enabled (substring Tier-1)" || echo "skipped (substring would false-positive on paraphrase)")
+- **Grounding**: $([ -z "$SKIP_GROUNDING" ] && echo "Tier-2 fuzzy substring (≥ 0.80 normalized similarity)" || echo "disabled via --skip-grounding")
 - **Sample size**: $([ -z "$SAMPLE" ] && echo "all 50 cases" || echo "$SAMPLE cases (sample mode)")
 - **Retry budget**: 3 attempts per case with structured feedback
 - **Caching**: 1-hour TTL \`cache_control\` on tools + system + strategy suffix
